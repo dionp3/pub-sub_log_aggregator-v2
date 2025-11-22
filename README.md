@@ -1,4 +1,4 @@
-# Pub-Sub Log Aggregator dengan Idempotent Consumer dan Deduplikasi
+# Pub-Sub Log Aggregator dengan Idempotent Consumer, Deduplikasi, dan Transaksi/Kontrol Konkurensi
 
 Nama: Dion Prayoga
 NIM: 11221058

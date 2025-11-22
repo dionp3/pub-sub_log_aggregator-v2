@@ -7,8 +7,8 @@ import random
 import time
 
 AGGREGATOR_URL = "http://aggregator:8080/publish"
-NUM_EVENTS = 5000
-DUPLICATE_RATE = 0.20 
+NUM_EVENTS = 20000
+DUPLICATE_RATE = 0.30 
 
 def create_event(event_id, is_duplicate=False):
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
