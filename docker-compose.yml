@@ -1,11 +1,28 @@
 version: '3.8'
 
 services:
+  storage:
+    image: postgres:16-alpine
+    container_name: log_db_storage
+    environment:
+      POSTGRES_DB: log_db
+      POSTGRES_USER: log_user
+      POSTGRES_PASSWORD: log_password
+    volumes:
+      - pg_data:/var/lib/postgresql/data # Persistensi data (T6, T10)
+    networks:
+      - pubsub_net
+    restart: always
+
   aggregator:
     build: .
     container_name: log_aggregator
-    volumes:
-      - ./aggregator_data:/app/data   
+    depends_on:
+      - storage # Menunggu PostgreSQL siap
+    environment:
+      # Database Connection String
+      DATABASE_URL: postgresql://log_user:log_password@storage:5432/log_db
+      MIN_CONSUMERS: "5" # Set jumlah consumer worker (T9: Uji Konkurensi)
     ports:
       - "8080:8080"
     networks:
@@ -21,9 +38,18 @@ services:
       - aggregator
     networks:
       - pubsub_net
-    command: ["python", "-c", "import asyncio; asyncio.run(asyncio.sleep(5)); import src.publisher_sender; asyncio.run(src.publisher_sender.send_events())"]
-    restart: "no"
+    environment:
+      # Parameter stress test (T6, T7)
+      NUM_EVENTS: "25000"
+      DUPLICATE_RATE: "0.35"
+      AGGREGATOR_URL: "http://aggregator:8080/publish"
+    # Command: Wajib menunggu Aggregator siap, lalu menjalankan publisher.
+    command: ["python", "-c", "import asyncio; import os; os.environ['NUM_EVENTS'] = os.getenv('NUM_EVENTS', '25000'); os.environ['DUPLICATE_RATE'] = os.getenv('DUPLICATE_RATE', '0.35'); print('Waiting 10s for aggregator...'); asyncio.run(asyncio.sleep(10)); import src.publisher_sender; asyncio.run(src.publisher_sender.send_events())"]
+    restart: "no" # Agar selesai setelah tes
 
 networks:
   pubsub_net:
     driver: bridge
+
+volumes:
+  pg_data: # Definisi Named Volume
