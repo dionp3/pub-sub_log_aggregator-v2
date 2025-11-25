@@ -8,8 +8,9 @@ import os
 
 # --- Configuration from Environment ---
 AGGREGATOR_URL = os.getenv("AGGREGATOR_URL", "http://aggregator:8080/publish")
-NUM_EVENTS = int(os.getenv("NUM_EVENTS")) 
-DUPLICATE_RATE = float(os.getenv("DUPLICATE_RATE"))
+# Menggunakan default yang aman jika ENV belum diset
+NUM_EVENTS = int(os.getenv("NUM_EVENTS", "20000")) 
+DUPLICATE_RATE = float(os.getenv("DUPLICATE_RATE", "0.30"))
 
 def create_event(event_id, is_duplicate=False):
     """
@@ -32,31 +33,40 @@ def create_event(event_id, is_duplicate=False):
 async def send_events():
     """
     Mengirimkan sejumlah event secara asinkron ke Aggregator, 
-    termasuk menyuntikkan duplikat (T3).
+    menggunakan logika probabilistik (At-least-once delivery, T3).
     """
-    unique_ids = {}
+    unique_ids = set() # Set untuk melacak ID yang sudah pernah dibuat
+    
+    # --- Counters Real Sent ---
+    actual_unique_sent = 0 
+    actual_duplicate_sent = 0
     
     # Meningkatkan timeout untuk mengakomodasi beban stress test
     async with httpx.AsyncClient(timeout=30) as client: 
         print(f"--- Starting event submission to {AGGREGATOR_URL} ---")
-        print(f"Configuration: {NUM_EVENTS} total events, {DUPLICATE_RATE*100:.0f}% duplicates.")
+        print(f"Configuration: {NUM_EVENTS} total events, {DUPLICATE_RATE*100:.0f}% probability of duplication.")
         
         start_time = time.monotonic() 
         
         for i in range(NUM_EVENTS):
-            # Logika untuk injeksi duplikat
+            
+            # Logika duplikasi probabilistik
             is_dup = random.random() < DUPLICATE_RATE and unique_ids
             
             if is_dup:
-                target_id = random.choice(list(unique_ids.keys()))
+                # PENGIRIMAN DUPLIKAT (Menggunakan ID yang sudah ada)
+                target_id = random.choice(list(unique_ids)) 
                 event_data = create_event(target_id, is_duplicate=True)
+                actual_duplicate_sent += 1 
             else:
+                # PENGIRIMAN UNIK (Membuat ID baru)
                 new_id = str(uuid.uuid4())
-                unique_ids[new_id] = True
+                unique_ids.add(new_id) # Tambahkan ID baru ke set
                 event_data = create_event(new_id)
+                actual_unique_sent += 1 
 
             try:
-                # Pengiriman event (At-least-once delivery simulation)
+                # Pengiriman event 
                 response = await client.post(AGGREGATOR_URL, json=event_data)
                 response.raise_for_status() 
                 
@@ -78,9 +88,6 @@ async def send_events():
         
         # --- Summary Section (T10: Observability) ---
         
-        expected_unique_count = len(unique_ids)
-        expected_duplicate_count = NUM_EVENTS - expected_unique_count
-        
         print(f"\n--- Submission Completed ({NUM_EVENTS} events sent in {total_send_time:.2f}s) ---")
         
         wait_time = 20 
@@ -91,13 +98,17 @@ async def send_events():
         total_time = time.monotonic() - start_time
         print("\n--- Performance Summary ---")
         print(f"Events Sent: {NUM_EVENTS}")
-        print(f"Expected Unique IDs Generated: {expected_unique_count}")
-        print(f"Expected Duplicates Sent: {expected_duplicate_count}")
+        # Metrik Performa
+        print(f"Total Send Time: {total_send_time:.2f} seconds")
+        print(f"Approximate Send Rate: {NUM_EVENTS / total_send_time:.0f} events/sec")
         print(f"Total Test Window (Sending + Waiting): {total_time:.2f} seconds")
 
 
 if __name__ == "__main__":
-    print(f"--- Starting Performance Test for {NUM_EVENTS} Events ---")
+    # Menggunakan default yang aman di sini untuk robustness
+    NUM_EVENTS_DEFAULT = int(os.getenv("NUM_EVENTS", "20000")) 
+    
+    print(f"--- Starting Performance Test for {NUM_EVENTS_DEFAULT} Events ---")
     
     # Pre-wait untuk Aggregator/DB readiness (T10)
     print("Pre-wait for Aggregator/DB readiness (10s)...")
