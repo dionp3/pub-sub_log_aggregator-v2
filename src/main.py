@@ -1,4 +1,3 @@
-# src/main.py
 import asyncio
 import datetime
 import logging
@@ -10,7 +9,7 @@ from psycopg2 import sql # Untuk membuat query SQL yang aman
 from fastapi import FastAPI, Depends
 from src.models import Event, AggregatorStats, ProcessedEvent
 
-# Konfigurasi Logging
+# Konfigurasi Logging (T10: Observability)
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
@@ -27,7 +26,7 @@ class Aggregator:
         self.unique_count = 0
         self.duplicate_count = 0
         self.start_time = datetime.datetime.now()
-        # Ensure initial connection works before starting
+        # Ensure initial connection works before starting (T6: Crash Tolerance)
         try:
             self._init_db()
             logging.info(f"Aggregator initialized. DB: PostgreSQL. Workers: {MIN_CONSUMERS}")
@@ -37,7 +36,6 @@ class Aggregator:
 
     def _get_db_connection(self):
         """Membuka koneksi baru ke PostgreSQL."""
-        # Menambahkan autocommit=False secara default untuk transaksi eksplisit
         return psycopg2.connect(self.db_url)
 
     def _init_db(self):
@@ -80,13 +78,15 @@ class Aggregator:
     def _process_event_atomic(self, event: Event, consumer_id: int):
         """
         T8 & T9: Operasi Dedup Atomik dan Kontrol Konkurensi menggunakan ON CONFLICT.
+        Isolation Level: READ COMMITTED (default)
+        Strategi: Idempotent Upsert dengan Unique Constraint.
         """
         conn = self._get_db_connection()
         try:
-            # T8: Transaksi dimulai di sini
+            # T8: Transaksi dimulai di sini (psycopg2 default non-autocommit)
             cursor = conn.cursor()
             
-            # T9: Idempotent Upsert Pattern
+            # T9: Idempotent Upsert Pattern (Atomic Dedup)
             query = sql.SQL("""
                 INSERT INTO processed_events (event_id, topic, timestamp)
                 VALUES (%s, %s, %s)
@@ -94,15 +94,17 @@ class Aggregator:
                 RETURNING event_id;
             """)
 
-            # Menggunakan isoformat() untuk timestamp yang benar
             cursor.execute(query, (event.event_id, event.topic, event.timestamp.isoformat()))
             
+            # Memeriksa apakah ada baris yang benar-benar dimasukkan
             inserted_id = cursor.fetchone()
             
             if inserted_id:
+                # Transaksi berhasil
                 self.unique_count += 1
                 logging.info(f"CONSUMER #{consumer_id} PROCESSED: {event.topic} | {event.event_id}")
             else:
+                # Konflik terjadi -> Event duplikat
                 self.duplicate_count += 1
                 logging.warning(f"CONSUMER #{consumer_id} DUPLICATE DROPPED: {event.topic} | {event.event_id}")
 
@@ -115,7 +117,7 @@ class Aggregator:
             conn.close()
 
     def get_processed_events(self, topic: Optional[str] = None) -> List[ProcessedEvent]:
-        """Mengembalikan daftar event unik yang telah diproses, opsional difilter berdasarkan topik."""
+        """Endpoint GET /events. Run di thread terpisah agar tidak blocking ASGI."""
         conn = self._get_db_connection()
         cursor = conn.cursor()
         
@@ -134,7 +136,7 @@ class Aggregator:
                 ProcessedEvent(
                     event_id=row[0],
                     topic=row[1],
-                    # PostgreSQL mengembalikan objek datetime, pastikan timezone diinterpretasi
+                    # Normalisasi datetime dari DB ke format Pydantic
                     timestamp=row[2].replace(tzinfo=datetime.timezone.utc) if row[2].tzinfo is None else row[2]
                 ) for row in cursor.fetchall()
             ]
@@ -146,7 +148,7 @@ class Aggregator:
             conn.close()
 
     def get_stats(self) -> AggregatorStats:
-        """Mengembalikan metrik operasional dan statistik deduplikasi."""
+        """Endpoint GET /stats (T10: Observability). Run di thread terpisah."""
         uptime = int((datetime.datetime.now() - self.start_time).total_seconds())
         
         conn = self._get_db_connection()
@@ -154,7 +156,6 @@ class Aggregator:
         
         topics = []
         try:
-            # Dapatkan daftar topik unik yang ada di DB
             cursor.execute("SELECT DISTINCT topic FROM processed_events ORDER BY topic")
             topics = [row[0] for row in cursor.fetchall()]
         except Exception as e:
@@ -178,8 +179,7 @@ class Aggregator:
 app = FastAPI(title="Idempotent Log Aggregator (PostgreSQL Backend)")
 
 def get_aggregator() -> Aggregator:
-    """Dependency untuk mendapatkan instance Aggregator global."""
-    # Selalu gunakan variabel lingkungan untuk koneksi
+    """Dependency injection untuk mendapatkan instance Aggregator global."""
     db_url = os.getenv("DATABASE_URL", "postgresql://log_user:log_password@storage:5432/log_db")
     
     global global_aggregator
@@ -201,23 +201,20 @@ async def startup_event():
 @app.post("/publish", status_code=202)
 async def publish_event(event: Event, agg: Aggregator = Depends(get_aggregator)):
     """
-    Endpoint POST untuk menerima event dari publisher.
-    Status 202 (Accepted) menunjukkan event diterima dan sedang diproses secara asinkron.
+    Endpoint POST untuk menerima event. Status 202 menunjukkan event diterima
+    dan dimasukkan ke antrian pemrosesan.
     """
     await agg.add_event(event)
     return {"status": "accepted", "event_id": event.event_id}
 
 @app.get("/events", response_model=List[ProcessedEvent])
 async def get_events(topic: Optional[str] = None, agg: Aggregator = Depends(get_aggregator)):
-    """
-    Endpoint GET untuk mengembalikan daftar event unik yang telah diproses
-    (diambil dari Deduplication Store/PostgreSQL).
-    """
-    return await asyncio.to_thread(agg.get_processed_events, topic) # Run DB fetch in a thread
+    """Mengembalikan daftar event unik yang telah diproses."""
+    # Menjalankan fungsi blocking DB di thread pool
+    return await asyncio.to_thread(agg.get_processed_events, topic) 
 
 @app.get("/stats", response_model=AggregatorStats)
 async def get_stats(agg: Aggregator = Depends(get_aggregator)):
-    """
-    Endpoint GET untuk mengembalikan metrik operasional Aggregator.
-    """
-    return await asyncio.to_thread(agg.get_stats) # Run DB fetch in a thread
+    """Mengembalikan metrik operasional Aggregator."""
+    # Menjalankan fungsi blocking DB di thread pool
+    return await asyncio.to_thread(agg.get_stats)
