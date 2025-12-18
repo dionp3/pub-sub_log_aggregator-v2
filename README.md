@@ -1,90 +1,73 @@
 # Pub-Sub Log Aggregator dengan Idempotent Consumer, Deduplikasi, dan Transaksi/Kontrol Konkurensi
 
-Nama: Dion Prayoga
+Nama: Dion Prayoga\
 NIM: 11221058
 
 ## Deskripsi Proyek
 
-Layanan ini mengimplementasikan Log Aggregator berbasis pola **Publish-Subscribe**. Sistem dirancang untuk menangani *at-least-once delivery* dari *publisher* dengan menjamin **exactly-once processing** melalui **Idempotent Consumer** dan **Durable Deduplication Store (SQLite)** yang persisten di dalam *container* Docker.
+Layanan ini adalah sistem pengumpul log (Log Aggregator) berbasis arsitektur Publish-Subscribe. Sistem ini menjamin konsistensi data Exactly-Once Processing meskipun pengirim menggunakan mekanisme At-Least-Once Delivery.
+
+Proyek ini menggunakan PostgreSQL sebagai Durable Deduplication Store untuk memastikan bahwa event dengan event_id dan topic yang sama tidak akan diproses dua kali, bahkan jika terjadi crash atau restart pada layanan.
+
+Fitur Utama:
+* Atomic Deduplication: Menggunakan kunci komposit (event_id, topic) dengan strategi ON CONFLICT DO NOTHING.
+
+* Persistent Stats: Statistik (received, unique, duplicate) disimpan di database untuk mencegah lost updates pada skenario multi-worker.
+
+* Concurrent Workers: Aggregator menggunakan beberapa consumer tasks asinkron untuk memproses antrean log secara paralel.
+
+* Fault Tolerance: Menggunakan Docker Volumes untuk memastikan data log tetap aman meskipun container dihapus.
 
 -----
+
+## Arsitektur Sistem
+
+Sistem berjalan di atas jaringan internal Docker Compose yang terisolasi:
+
+1. Aggregator (FastAPI): Menerima event via HTTP POST, mengelola antrean internal (asyncio.Queue), dan menjalankan worker untuk menulis ke DB.
+
+2. Storage (PostgreSQL 16): Menyimpan log unik dan metrik operasional.
+
+3. Publisher (Simulator): Menghasilkan beban kerja (stress test) sebanyak 20.000+ event dengan rate duplikasi ~30%.
 
 ## Cara Menjalankan Layanan
 
-### Persyaratan
+## I. Eksekusi Layanan Docker
 
-  * **Python 3.11+** terinstal (untuk *unit testing* lokal dan *venv*).
-  * Docker Desktop (Windows/Linux) terinstal dan berjalan.
-  * Terminal Windows (PowerShell/CMD).
+Pastikan Docker & Docker Compose sudah terinstal di sistem Anda.
 
------
+1. **Clone dan Masuk ke Folder:**
+```bash
+cd pub-sub_log_aggregator-v2
 
-## I. Persiapan Virtual Environment
+```
 
-Anda harus mengaktifkan *virtual environment* sebelum melakukan *build* atau *testing* di *host*.
 
-1.  **Buat Virtual Environment:**
+2. **Jalankan Layanan:**
+```bash
+docker-compose up --build -d
 
-    ```powershell
-    python -m venv venv
-    ```
+```
 
-2.  **Aktifkan Environment:**
 
-    ```powershell
-    .\venv\Scripts\activate
-    ```
+* `aggregator` akan berjalan di port `8080`.
+* `publisher` akan mulai mengirim 20.000 event setelah jeda startup 10 detik.
 
-3.  **Instal Dependensi (Termasuk Pytest):**
 
-    ```powershell
-    pip install -r requirements.txt
-    ```
+3. **Pantau Proses:**
+```bash
+docker logs -f log_aggregator
 
------
+```
 
-## II. Eksekusi Layanan Docker
-
-### A. Opsi Wajib: Single Container (Aggregator Saja)
-
-Ini menjalankan Aggregator dan mengasumsikan *Publisher* adalah Postman/cURL dari *host*.
-
-1.  **Build Image:** (Pastikan `venv` aktif)
-
-    ```powershell
-    docker build -t uts-aggregator .
-    ```
-
-2.  **Run Container:**
-
-    ```powershell
-    docker run -d --name aggregator-service -p 8080:8080 uts-aggregator
-    ```
-
-    (Layanan dapat diakses di `http://localhost:8080` dan gunakan Endpoint API Log Aggregator).
-
-### B. Opsi Bonus: Docker Compose (Aggregator & Publisher)
-
-Ini menjalankan **dua *service* terpisah** dan mensimulasikan lalu lintas log otomatis.
-
-1.  **Run Services:**
-
-    ```powershell
-    docker-compose up --build -d
-    ```
-
-      * Container `log_aggregator` akan diekspos di `http://localhost:8080`.
-      * Container `log_publisher` akan otomatis mengirim event ke jaringan internal dan keluar.
-
-2.  **Monitor Log (Opsional):**
-
-    ```powershell
-    docker logs log_aggregator -f
-    ```
+4. **Untuk Hapus Data**
+```bash
+docker-compose down -v
+```
 
 -----
 
-### Endpoint API Log Aggregator
+## II. Endpoint API Log Aggregator
 
 Base URL: `http://localhost:8080`
 
@@ -96,22 +79,7 @@ Base URL: `http://localhost:8080`
 
 -----
 
-### Uji Performa dan Stress Test (Publisher Lokal)
-
-Skrip `src/publisher_sender.py` akan mengirim **5.000 event** (dengan 20% duplikasi) ke Aggregator untuk mengukur *responsiveness*.
-
-1.  **Eksekusi Skrip Publisher:**
-
-    ```bash
-    python src/publisher_sender.py
-    ```
-
-      * Publisher akan menunggu 10 detik agar Aggregator siap, kemudian mengirim semua event secara asinkron.
-      * Publisher akan mencetak **Total Uptime/Processing Window** setelah selesai.
-
------
-
-## III. Menjalankan Unit Tests (Opsional di Host)
+## III. Pengujian Unit & Integration Tests
 
 Unit tests harus dijalankan setelah mengaktifkan *venv* dan sebelum *build* Docker.
 
@@ -124,23 +92,47 @@ Unit tests harus dijalankan setelah mengaktifkan *venv* dan sebelum *build* Dock
     pytest tests/test_aggregator.py
     ```
 
+Pengujian dilakukan menggunakan **Pytest** dan membutuhkan database PostgreSQL yang sedang berjalan (test menggunakan database asli untuk akurasi driver `psycopg2`).
+
+1. **Siapkan Environment:**
+```bash
+python -m venv venv
+.\venv\Scripts\activate  # Windows
+pip install -r requirements.txt
+
+```
+
+
+2. **Jalankan Test:**
+```bash
+$env:PYTHONPATH="."  # Windows PowerShell
+pytest tests/test_aggregator.py -v
+
+```
+
 -----
 
 ### Unit Tests (Pytest)
 
-Layanan Aggregator dijamin berfungsi dengan benar dan stabil melalui 6 *unit tests* berbasis `pytest` dan `pytest-asyncio`. Pengujian berfokus pada validasi *state* sistem, *idempotency*, dan *toleransi kegagalan*.
+Layanan Aggregator menjamin integritas data dan stabilitas sistem melalui 12 skenario pengujian komprehensif berbasis pytest dan pytest-asyncio. Rangkaian pengujian ini dirancang secara sistematis untuk memvalidasi mekanisme deduplikasi (idempotency), akurasi transaksi atomik pada multi-worker, serta toleransi kegagalan untuk memastikan persistensi data tetap terjaga meskipun terjadi gangguan pada layanan.
 
 | Test ID | Fungsi yang Diuji | Deskripsi Singkat | Cakupan Rubrik |
-| :--- | :--- | :--- | :--- |
-| **Test 1** | `test_t1_deduplication_validity` | Memverifikasi **Idempotency** dengan mengirimkan dua *event* yang identik (`event\_id` sama). Memastikan **`unique_processed`** adalah 1 dan **`duplicate_dropped`** adalah 1. | Dedup/Idempotency, API, Stats |
-| **Test 2** | `test_t2_persistence_after_restart` | Menguji **Toleransi Kegagalan** dan **Persistensi Dedup Store**. Mensimulasikan *restart* (*instance* Aggregator baru) setelah event diproses, lalu mengirimkan duplikat event lama. Memastikan *instance* baru menolak event tersebut. | Idempotency, Toleransi Kegagalan |
-| **Test 3** | `test_t3_event_schema_validation` | Memastikan validasi skema **Pydantic** pada *endpoint* `/publish` bekerja dengan benar, khususnya menolak *event* yang tidak memiliki `event_id` (kunci unik). | Validasi Skema |
-| **Test 4** | `test_t4_get_stats_consistency` | Menguji **Konsistensi Statistik** dan *state cleanup* antar *test*. Memastikan `received`, `unique_processed`, `duplicate_dropped`, dan `topics` akurat setelah pengiriman dua *event* unik. | API, Stats |
-| **Test 5** | `test_t5_get_events_with_topic_filter` | Menguji fungsi *filtering* pada *endpoint* `/events?topic=...`. Memastikan deduplikasi dan filter *topic* bekerja secara simultan, hanya mengembalikan event unik yang sesuai dengan filter. | API, Dedup |
-| **Test 6** | `test_t6_stress_small_batch` | Menguji *baseline* **Performa** dan *state* sistem saat memproses $100$ *event* secara berturut-turut. Memastikan waktu eksekusi berada di bawah batas wajar ($< 5$ detik). | Performa |
+| --- | --- | --- | --- |
+| **Test 1** | `test_t1_deduplication_validity` | Memverifikasi **Idempotency** dengan mengirimkan dua event identik. Memastikan hanya 1 yang unik diproses dan 1 duplikat terdeteksi. | Dedup/Idempotency |
+| **Test 2** | `test_t2_persistence_after_restart` | Menguji **Persistensi**. Memastikan data dalam *named volume* tetap ada sehingga instance baru tetap menolak duplikat dari masa lalu. | Toleransi Kegagalan |
+| **Test 3** | `test_t3_event_schema_validation` | Memastikan **Pydantic** menolak request jika field wajib seperti `event_id` hilang (mengembalikan Status 422). | Validasi Skema |
+| **Test 4** | `test_t4_get_stats_consistency` | Menguji akurasi `/stats`. Memastikan jumlah `received` dan daftar `topics` sesuai dengan jumlah data yang dikirimkan. | API, Observability |
+| **Test 5** | `test_t5_get_events_with_topic_filter` | Memastikan endpoint `/events?topic=...` hanya mengembalikan event yang relevan dengan topik yang diminta. | API, Filtering |
+| **Test 6** | `test_t6_stress_small_batch` | Menguji **Performa**. Memproses 100 event unik secara beruntun untuk memastikan waktu eksekusi berada di bawah 5 detik. | Performa |
+| **Test 7** | `test_t7_concurrency_race_condition` | Menguji **Race Condition Duplikat**. Mengirim 5 duplikat secara simultan untuk memastikan database hanya mengizinkan 1 proses insert. | Transaksi/Konkurensi |
+| **Test 8** | `test_t8_concurrency_unique_events` | Memastikan sistem mampu menangani 10 event unik yang masuk bersamaan (asinkron) tanpa ada data yang hilang. | Transaksi/Konkurensi |
+| **Test 9** | `test_t9_composite_key_uniqueness` | Menguji **Composite Key**. Memastikan `event_id` yang sama bisa diterima jika dikirim ke `topic` yang berbeda. | Desain Database |
+| **Test 10** | `test_t10_invalid_schema_timestamp` | Validasi tipe data. Memastikan sistem menolak request jika format `timestamp` tidak mengikuti standar ISO8601. | Validasi Skema |
+| **Test 11** | `test_t11_get_events_empty_filter` | Memastikan endpoint `/events` tanpa parameter mengembalikan seluruh data unik dari semua topik yang tersedia. | API |
+| **Test 12** | `test_t12_stats_uptime_accuracy` | Memastikan kalkulasi `uptime` pada statistik meningkat secara akurat (integer detik) seiring berjalannya waktu aplikasi. | Observability |
 
 -----
 
 ## Video Demo
 
-[https://youtu.be/ya2SLrltG2I]
+[]

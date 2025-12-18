@@ -1,16 +1,17 @@
 version: '3.8'
 
 services:
-  # T10: Layanan Database Persisten (PostgreSQL)
   storage:
     image: postgres:16-alpine
+    ports:
+      - "5432:5432"
     container_name: log_db_storage
     environment:
       POSTGRES_DB: log_db
       POSTGRES_USER: log_user
       POSTGRES_PASSWORD: log_password
     volumes:
-      - pg_data:/var/lib/postgresql/data # T6, T10: Named Volume untuk Crash Tolerance
+      - pg_data:/var/lib/postgresql/data 
     networks:
       - pubsub_net
     restart: always
@@ -20,17 +21,16 @@ services:
       timeout: 5s
       retries: 5
 
-  # T10: Layanan Aggregator (Consumer Idempotent)
   aggregator:
     build: .
     container_name: log_aggregator
     depends_on:
       storage:
-        condition: service_healthy # Hanya jalan jika DB siap
+        condition: service_healthy 
     environment:
       # Database Connection String
       DATABASE_URL: postgresql://log_user:log_password@storage:5432/log_db
-      MIN_CONSUMERS: "5" # T9: Jumlah worker concurrent untuk uji race condition
+      MIN_CONSUMERS: "5" 
     ports:
       - "8080:8080"
     networks:
@@ -39,26 +39,23 @@ services:
     working_dir: /app
     command: ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8080"]
     
-  # T10: Layanan Publisher (Simulator Stress Test)
   publisher:
     build: .
     container_name: log_publisher
     depends_on:
-      - aggregator # Memastikan Aggregator siap menerima koneksi
+      - aggregator 
     networks:
       - pubsub_net
     environment:
-      # T6, T7: Parameter stress test (>= 20.000 events, >= 30% duplikasi)
       NUM_EVENTS: "20000"
       DUPLICATE_RATE: "0.30"
       AGGREGATOR_URL: "http://aggregator:8080/publish"
-    # Command: Menunggu 10s agar Aggregator memulai consumer, lalu menjalankan simulasi.
-    command: ["python", "-c", "import asyncio; import os; os.environ['NUM_EVENTS'] = os.getenv('NUM_EVENTS', '25000'); os.environ['DUPLICATE_RATE'] = os.getenv('DUPLICATE_RATE', '0.35'); print('Waiting 10s for aggregator...'); asyncio.run(asyncio.sleep(10)); import src.publisher_sender; asyncio.run(src.publisher_sender.send_events())"]
-    restart: "no" # Agar selesai setelah tes
+    command: ["python", "-c", "import asyncio; import os; os.environ['NUM_EVENTS'] = os.getenv('NUM_EVENTS', '20000'); os.environ['DUPLICATE_RATE'] = os.getenv('DUPLICATE_RATE', '0.30'); print('Waiting 10s for aggregator...'); asyncio.run(asyncio.sleep(10)); import src.publisher_sender; asyncio.run(src.publisher_sender.send_events())"]
+    restart: "no" 
 
 networks:
   pubsub_net:
     driver: bridge
 
 volumes:
-  pg_data: # T10: Named Volume untuk persistensi data PostgreSQL
+  pg_data: 

@@ -6,23 +6,17 @@ import random
 import time
 import os
 
-# --- Configuration from Environment ---
 AGGREGATOR_URL = os.getenv("AGGREGATOR_URL", "http://aggregator:8080/publish")
-# Menggunakan default yang aman jika ENV belum diset
 NUM_EVENTS = int(os.getenv("NUM_EVENTS", "20000")) 
 DUPLICATE_RATE = float(os.getenv("DUPLICATE_RATE", "0.30"))
 
 def create_event(event_id, is_duplicate=False):
-    """
-    Membuat struktur event JSON sesuai skema src/models.py.
-    """
-    # T5: Menggunakan datetime.timezone.utc untuk konsistensi waktu
+
     ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
     
     payload_content = "Initial log" if not is_duplicate else "Retry log - Duplicated"
     
     return {
-        # Event Topics dibagi menjadi 3 level (T4)
         "topic": f"app.log.level-{random.randint(1, 3)}",
         "event_id": event_id,
         "timestamp": ts,
@@ -31,17 +25,12 @@ def create_event(event_id, is_duplicate=False):
     }
 
 async def send_events():
-    """
-    Mengirimkan sejumlah event secara asinkron ke Aggregator, 
-    menggunakan logika probabilistik (At-least-once delivery, T3).
-    """
-    unique_ids = set() # Set untuk melacak ID yang sudah pernah dibuat
+
+    unique_ids = set() 
     
-    # --- Counters Real Sent ---
     actual_unique_sent = 0 
     actual_duplicate_sent = 0
     
-    # Meningkatkan timeout untuk mengakomodasi beban stress test
     async with httpx.AsyncClient(timeout=30) as client: 
         print(f"--- Starting event submission to {AGGREGATOR_URL} ---")
         print(f"Configuration: {NUM_EVENTS} total events, {DUPLICATE_RATE*100:.0f}% probability of duplication.")
@@ -54,19 +43,16 @@ async def send_events():
             is_dup = random.random() < DUPLICATE_RATE and unique_ids
             
             if is_dup:
-                # PENGIRIMAN DUPLIKAT (Menggunakan ID yang sudah ada)
                 target_id = random.choice(list(unique_ids)) 
                 event_data = create_event(target_id, is_duplicate=True)
                 actual_duplicate_sent += 1 
             else:
-                # PENGIRIMAN UNIK (Membuat ID baru)
                 new_id = str(uuid.uuid4())
-                unique_ids.add(new_id) # Tambahkan ID baru ke set
+                unique_ids.add(new_id) 
                 event_data = create_event(new_id)
                 actual_unique_sent += 1 
 
             try:
-                # Pengiriman event 
                 response = await client.post(AGGREGATOR_URL, json=event_data)
                 response.raise_for_status() 
                 
@@ -74,43 +60,35 @@ async def send_events():
                 print(f"\n!!! ERROR: Could not connect to aggregator at {AGGREGATOR_URL}. Aborting.")
                 return
             except httpx.TimeoutException:
-                # T6: Publisher dapat mengimplementasikan Retry dengan Backoff di sini
                 print(f"!!! WARNING: Request timed out for ID: {event_data['event_id']}")
             except httpx.HTTPStatusError as e:
                 print(f"!!! HTTP ERROR: Failed to publish ID {event_data['event_id']} (Status: {e.response.status_code})")
             
-            # Delay minimal untuk high throughput
             await asyncio.sleep(0.0001) 
 
         end_time = time.monotonic() 
         
         total_send_time = end_time - start_time
-        
-        # --- Summary Section (T10: Observability) ---
-        
+                
         print(f"\n--- Submission Completed ({NUM_EVENTS} events sent in {total_send_time:.2f}s) ---")
         
         wait_time = 20 
         print(f"Waiting {wait_time} seconds for Aggregator to finalize queue processing...")
         await asyncio.sleep(wait_time) 
         
-        
         total_time = time.monotonic() - start_time
         print("\n--- Performance Summary ---")
         print(f"Events Sent: {NUM_EVENTS}")
-        # Metrik Performa
         print(f"Total Send Time: {total_send_time:.2f} seconds")
         print(f"Approximate Send Rate: {NUM_EVENTS / total_send_time:.0f} events/sec")
         print(f"Total Test Window (Sending + Waiting): {total_time:.2f} seconds")
 
 
 if __name__ == "__main__":
-    # Menggunakan default yang aman di sini untuk robustness
     NUM_EVENTS_DEFAULT = int(os.getenv("NUM_EVENTS", "20000")) 
     
     print(f"--- Starting Performance Test for {NUM_EVENTS_DEFAULT} Events ---")
     
-    # Pre-wait untuk Aggregator/DB readiness (T10)
     print("Pre-wait for Aggregator/DB readiness (10s)...")
     asyncio.run(asyncio.sleep(10)) 
     
