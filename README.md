@@ -85,17 +85,6 @@ Base URL: `http://localhost:8080`
 
 ## III. Pengujian Unit & Integration Tests
 
-Unit tests harus dijalankan setelah mengaktifkan *venv* dan sebelum *build* Docker.
-
-  * **Set PYTHONPATH (Wajib di Windows):**
-    ```powershell
-    $env:PYTHONPATH="."
-    ```
-  * **Jalankan Pytest:**
-    ```powershell
-    pytest tests/test_aggregator.py
-    ```
-
 Pengujian dilakukan menggunakan **Pytest** dan membutuhkan database PostgreSQL yang sedang berjalan (test menggunakan database asli untuk akurasi driver `psycopg2`).
 
 1. **Siapkan Environment:**
