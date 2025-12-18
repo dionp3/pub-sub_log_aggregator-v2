@@ -3,6 +3,10 @@
 Nama: Dion Prayoga\
 NIM: 11221058
 
+## Video Demo
+
+[]
+
 ## Deskripsi Proyek
 
 Layanan ini adalah sistem pengumpul log (Log Aggregator) berbasis arsitektur Publish-Subscribe. Sistem ini menjamin konsistensi data Exactly-Once Processing meskipun pengirim menggunakan mekanisme At-Least-Once Delivery.
@@ -60,7 +64,7 @@ docker logs -f log_aggregator
 
 ```
 
-4. **Untuk Hapus Data**
+4. **Untuk Hapus Data:**
 ```bash
 docker-compose down -v
 ```
@@ -132,7 +136,3 @@ Layanan Aggregator menjamin integritas data dan stabilitas sistem melalui 12 ske
 | **Test 12** | `test_t12_stats_uptime_accuracy` | Memastikan kalkulasi `uptime` pada statistik meningkat secara akurat (integer detik) seiring berjalannya waktu aplikasi. | Observability |
 
 -----
-
-## Video Demo
-
-[]

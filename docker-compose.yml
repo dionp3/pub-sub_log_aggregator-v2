@@ -28,7 +28,6 @@ services:
       storage:
         condition: service_healthy 
     environment:
-      # Database Connection String
       DATABASE_URL: postgresql://log_user:log_password@storage:5432/log_db
       MIN_CONSUMERS: "5" 
     ports:
