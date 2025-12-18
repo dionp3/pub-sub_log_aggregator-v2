@@ -5,7 +5,7 @@ NIM: 11221058
 
 ## Video Demo
 
-[]
+[https://youtu.be/A2QrCLUEp_c]
 
 ## Deskripsi Proyek
 
